@@ -53,6 +53,9 @@ def process_coords(ds, concat_dim='time', drop=True, hard=True,
     if hard:
         target_coords += [d for d in ds.dims if d != concat_dim]
         
+    # make sure all target_coords are in the dataset
+    target_coords = [a for a in target_coords if a in list(ds.keys())]
+        
     if drop:
         return ds.drop(target_coords)
     else:
@@ -112,18 +115,31 @@ def data_vars_consistency(path1, path2, **kwargs):
     return list(set(ds1.variables)^set(ds2.variables))
 
 
-def open_mom5_single_var(ddir, var, years=None, yearfmt='%040101',
+def open_mom5_single_var(ddir, var, years=None, yearfmt='%040101', filenamefmt=None,
                          drop_inconsistent=True, add_coords=True, add_reftime=True,
                          switch_year_name=False, gridfile=None, parallel=False,
                          debug=False, **kwargs):
-    """Open files for a single filename(`var`) in the directory `ddir`. Inconsistent variables (not written in the last and first file) are automaticlly dropped. Adding coordinates from a reference file (first file in the list) can be supressed by setting `add_coords` to false."""
+    """Open files for a single filename(`var`) in the directory `ddir`. Inconsistent variables (not written in the last and first file) are automaticlly dropped. Adding coordinates from a reference file (first file in the list) can be supressed by setting `add_coords` to false.
+    Document the filefmt stuff...
+    This is an example for files found in /archive/Julius.Busecke/CM2.6/CM2.6_A_Control-1860_V03/pp/ocean/annual_1yr...
+    
+    fmt = "{var}.{year}.ann.nc"
+    
+    Eventually replace all other logic with that...
+    """
     if years is None:
         all_fnames = sorted(glob(os.path.join(ddir, '*%s*.nc' %var)))
     else:
-        if switch_year_name:
-            pathspecs = [os.path.join(ddir,'%s*%04i*.nc' %(var, year)) for year in years]
+        if filenamefmt:
+            # this shit just got fancy!
+            filled_years = [str(year).zfill(4) for year in years]
+            pathspecs = [os.path.join(ddir, filenamefmt.format(var=var, year=year)) for year in filled_years]
         else:
-            pathspecs = [os.path.join(ddir,'%04i*%s*.nc' %(year, var)) for year in years]
+            if switch_year_name:
+                pathspecs = [os.path.join(ddir,'%s*%04i*.nc' %(var, year)) for year in years]
+            else:
+                pathspecs = [os.path.join(ddir,'%04i*%s*.nc' %(year, var)) for year in years]
+        
         flists = [glob(pathspec) for pathspec in pathspecs]
         if debug:
             print(flists)
@@ -228,6 +244,7 @@ def open_mom5_CM_ESM(basedir, timespec='monthly_1yr', subfolder='av', varfolderl
     
     force_varlist: bool
         `force_varlist` is currently necessary for ESM2.6 since the files are saved in different naming convention.
+        This is not well explained...
     
     reftime: {None, str}
         Physical and Biogeochemical output can have different timestamps (leading to problems when merging).
@@ -260,6 +277,7 @@ def open_mom5_CM_ESM(basedir, timespec='monthly_1yr', subfolder='av', varfolderl
         path = os.path.join(basedir, va, subfolder, timespec)
         if os.path.isdir(path):        
             print('reading %s' %va)
+            print(varlist)
             ds = open_mom5_all_vars(path, varlist, add_coords=False, years=years, **kwargs)
             print('timesteps: %i' %len(ds.time))
             datasets.append(ds)

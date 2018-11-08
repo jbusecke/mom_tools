@@ -9,31 +9,35 @@ from xarrayutils.cm26_codebucket import drop_all_coords
 
 def split_adv_budget(ds):
     ds = ds.copy()
-    grid=Grid(ds)
-    area = ds.area_t
-    div_x = - grid.diff(ds.o2_xflux_adv, 'X', boundary='fill') / area
-    div_y = - grid.diff(ds.o2_yflux_adv, 'Y', boundary='fill') / area
-    div_z =  grid.diff(ds.o2_zflux_adv, 'Z', boundary='fill') / area
+    if 'o2_xflux_adv' in list(ds.data_vars):
+        grid=Grid(ds)
+        area = ds.area_t
+        div_x = - grid.diff(ds.o2_xflux_adv, 'X', boundary='fill') / area
+        div_y = - grid.diff(ds.o2_yflux_adv, 'Y', boundary='fill') / area
+        div_z =  grid.diff(ds.o2_zflux_adv, 'Z', boundary='fill') / area
 
-    for data, name in zip([div_x, div_y, div_z], ['o2_advection_%s' % a for a in ['x', 'y', 'z']]):
-        ds[name] = data
+        for data, name in zip([div_x, div_y, div_z], ['o2_advection_%s' % a for a in ['x', 'y', 'z']]):
+            ds[name] = data
     return ds
 
 def budget_prep(ds, tracer='o2'):
     """Does some simplifications of the budget to compare high res and low res better 
     This works for o2 but namingconventions might be different for other tracers...use with care"""
     ds = ds.copy()
-    # combine vertical terms
-    ds['%s_diff_ver' %tracer] = ds['%s_nonlocal_KPP' %tracer] + ds['%s_vdiffuse_impl' %tracer]
+    # check if budget terms are in ds
+    if 'o2_tendency' in list(ds.data_vars):
     
-    # combine fields from the two resolutions into comparable fields
-    if 'neutral_diffusion_%s' %tracer in ds.data_vars:
-        ds['%s_diff_hor' %tracer] = ds['neutral_diffusion_%s' %tracer] + ds['neutral_gm_%s' %tracer]
-        ds['%s_diff' %tracer] = ds['%s_diff_ver' %tracer] + ds['%s_diff_hor' %tracer] + ds['%s_rivermix' %tracer]
-    else:
-        ds['%s_diff' %tracer] = ds['%s_diff_ver' %tracer]
-    
-    ds['%s_residual' %tracer] = ds['%s_tendency' %tracer] - (ds['%s_advection' %tracer] + ds['j%s' %tracer] + ds['%s_diff' %tracer] + ds['%s_submeso' %tracer])
+        # combine vertical terms
+        ds['%s_diff_ver' %tracer] = ds['%s_nonlocal_KPP' %tracer] + ds['%s_vdiffuse_impl' %tracer]
+
+        # combine fields from the two resolutions into comparable fields
+        if 'neutral_diffusion_%s' %tracer in ds.data_vars:
+            ds['%s_diff_hor' %tracer] = ds['neutral_diffusion_%s' %tracer] + ds['neutral_gm_%s' %tracer]
+            ds['%s_diff' %tracer] = ds['%s_diff_ver' %tracer] + ds['%s_diff_hor' %tracer] + ds['%s_rivermix' %tracer]
+        else:
+            ds['%s_diff' %tracer] = ds['%s_diff_ver' %tracer]
+
+        ds['%s_residual' %tracer] = ds['%s_tendency' %tracer] - (ds['%s_advection' %tracer] + ds['j%s' %tracer] + ds['%s_diff' %tracer] + ds['%s_submeso' %tracer])
     return ds
 
 ################### Bare bones budget calculations
@@ -132,3 +136,6 @@ def remap_v_2_nt(v, grid, boundary='extend'):
     dxtn = grid._ds.dxtn
     v_on_nt = grid.interp((v * dxu), 'X', boundary=boundary) / dxtn
     return v_on_nt
+
+def grad(tracer, grid, boundary='extend'):
+    """Computes the 3 gradient components. I am not su"""
