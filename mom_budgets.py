@@ -20,19 +20,19 @@ def split_adv_budget(ds):
     return ds
 
 def budget_prep(ds, tracer='o2'):
-    """Does some simplifications of the budget to compare high res and low res better 
+    """Does some simplifications of the budget to compare high res and low res better
     This works for o2 but namingconventions might be different for other tracers...use with care"""
     ds = ds.copy()
     # combine vertical terms
     ds['%s_diff_ver' %tracer] = ds['%s_nonlocal_KPP' %tracer] + ds['%s_vdiffuse_impl' %tracer]
-    
+
     # combine fields from the two resolutions into comparable fields
     if 'neutral_diffusion_%s' %tracer in ds.data_vars:
         ds['%s_diff_hor' %tracer] = ds['neutral_diffusion_%s' %tracer] + ds['neutral_gm_%s' %tracer]
         ds['%s_diff' %tracer] = ds['%s_diff_ver' %tracer] + ds['%s_diff_hor' %tracer] + ds['%s_rivermix' %tracer]
     else:
         ds['%s_diff' %tracer] = ds['%s_diff_ver' %tracer]
-    
+
     ds['%s_residual' %tracer] = ds['%s_tendency' %tracer] - (ds['%s_advection' %tracer] + ds['j%s' %tracer] + ds['%s_diff' %tracer] + ds['%s_submeso' %tracer])
     return ds
 
@@ -63,18 +63,19 @@ def reconstruct_thickness(eta, h, mask, dz_star, ref_array):
 
 
 def reconstruct_hrho_trans(u, v, wt, rho_dzt, grid, rho, reconstruct_w_from_cont=False):
-    """Reconstruct thickness weighted mass transport in x,y,z direction. 
+    """Reconstruct thickness weighted mass transport in x,y,z direction.
     Units: uhrho_et/vhrho_nt [kg * s^-1 * m^-1]
            wrhot [kg * s^-1 * m^-2]"""
     rho_dzu = grid_shift(grid_shift(min_at_u(rho_dzt), 'X', grid), 'Y', grid)
     uhrho_et = remap_u_2_et((u * rho_dzu), grid)
     vhrho_nt = remap_v_2_nt((v * rho_dzu), grid)
+
     # I need to build in a routine to get w from cont
     if reconstruct_w_from_cont:
         raise RuntimeError('Not implemented')
 #         wrhot = grid_shift((- uhrho_et - vhrho_nt), 'Z', grid)
     else:
-        wrhot= wt * rho
+        wrhot = wt * rho
     return uhrho_et, vhrho_nt, wrhot
 
 def approximate_transport_op(uflux, vflux, wflux, tracer, grid, boundary='extend'):
@@ -96,15 +97,15 @@ def horizontal_t_cell_div(u, v, w, grid, boundary='extend'):
 
 def t_cell_tendency(uflux, vflux, wflux, tracer, grid):
     """converts thicknesswighted (horizontal) mass trans"""
-    
+
     tracer_xflux_adv, tracer_yflux_adv, tracer_zflux_adv = \
         approximate_transport_op(uflux, vflux, wflux, tracer, grid)
-    
+
     uf_div, vf_div, wf_div = horizontal_t_cell_div(tracer_xflux_adv,
                                                    tracer_yflux_adv,
                                                    tracer_zflux_adv,
                                                    grid)
-    
+
     return (uf_div + vf_div + wf_div) / grid._ds.area_t
 
 def grid_shift(da, axis, grid, boundary='extend'):
@@ -126,7 +127,7 @@ def remap_u_2_et(u, grid, boundary='extend'):
     dyte = grid._ds.dyte
     u_on_et = grid.interp((u * dyu), 'Y', boundary=boundary) / dyte
     return u_on_et
-    
+
 def remap_v_2_nt(v, grid, boundary='extend'):
     dxu = grid._ds.dxu
     dxtn = grid._ds.dxtn
