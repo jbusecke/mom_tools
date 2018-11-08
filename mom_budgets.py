@@ -3,7 +3,7 @@ import xarray as xr
 from xgcm import Grid
 import numpy as np
 import os
-from xarrayutils.cm26_codebucket import drop_all_coords
+# from xarrayutils.cm26_codebucket import drop_all_coords
 
 ################# more high level convenience functions
 
