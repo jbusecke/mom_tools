@@ -5,7 +5,97 @@ import numpy as np
 import os
 # from xarrayutils.cm26_codebucket import drop_all_coords
 
+# I think this should go to the EUC-shape processing, since it is quite specialized
+def add_split_tendencies(ds):
+    """Reconstructs various fluxes and tendencies (x-y_x) from the monthly averaged output. Hardcoded to o2 atm."""
+    ds = ds.copy()
+    
+    
+    rho = 1035 #reference density
+    grid = Grid(ds)
+    
+    # This should be calculated upstream (see: add_vertical_spacing), it is possibly totally wrong
+    if 'dzwt' not in ds.coords:
+        print('Vertical spacing for vertical vel cell is approximated!!! Use with caution')
+        ds.coords['dzwt'] = grid.interp(ds['dzt'], 'Z')
+    # These should be less critical, but should be given nontheless
+    if 'dxte' not in ds.coords:
+        print('Spacing for `dxte` is approximated!!! Use with caution')
+        ds.coords['dxte'] = grid.interp(ds['dxt'], 'X')
+    if 'dytn' not in ds.coords:
+        print('Spacing for `dytn` is approximated!!! Use with caution')
+        ds.coords['dytn'] = grid.interp(ds['dyt'], 'Y')
+
+    # Calculate thickness weighted mass transports from velocities according to MOM5 formulation
+    uhrho_et, vhrho_nt, wrhot = reconstruct_hrho_trans(ds.u, ds.v, ds.wt, ds.dzt * rho, ds.dzu * rho, grid, rho)
+    
+    # Reconstruct the flux terms
+    ds['o2_xflux_adv_recon'], ds['o2_yflux_adv_recon'], ds['o2_zflux_adv_recon'] = \
+        approximate_transport_op(uhrho_et, vhrho_nt, wrhot, ds['o2'], grid, boundary='extend')
+    
+    # Calculate tendencies from all advective fluxes
+    for suffix in ['', '_recon']:
+        ds['o2_advection_x'+suffix], \
+        ds['o2_advection_y'+suffix], \
+        ds['o2_advection_z'+suffix] = tend_from_fluxes(ds['o2_xflux_adv'+suffix],
+                                                       ds['o2_yflux_adv'+suffix],
+                                                       ds['o2_zflux_adv'+suffix], grid)
+    
+    # Reconstruct tendency terms seperately for changes in tracer and changes in transport
+    udiv, vdiv, wdiv = tend_from_fluxes(uhrho_et * grid._ds.dyte, vhrho_nt * grid._ds.dxtn, wrhot * grid._ds.area_t, grid)
+    ds['o2_advection_x_recon_vel'] = ds['o2'] * udiv
+    ds['o2_advection_y_recon_vel'] = ds['o2'] * vdiv
+    ds['o2_advection_z_recon_vel'] = ds['o2'] * wdiv
+    
+    ds['o2_advection_x_recon_tracer'] = -grid.interp(grid.diff(ds['o2'], 'X') / grid._ds.dxte * uhrho_et, 'X')
+    ds['o2_advection_y_recon_tracer'] = -grid.interp(grid.diff(ds['o2'], 'Y') / grid._ds.dytn * vhrho_nt, 'Y')
+    ds['o2_advection_z_recon_tracer'] = -grid.interp(grid.diff(ds['o2'], 'Z') / grid._ds.dzwt * wrhot, 'Z')
+
+
+#     # some interpolations... might want to remap these in the future, to get more accurate estimates
+#     u = grid.interp(ds['u'], 'Y')
+#     v = grid.interp(ds['v'], 'X')
+#     wt = ds['wt']
+# #     dxte = grid.interp(ds.dxu, 'Y')
+# #     dytn = grid.interp(ds.dyu, 'X')
+    
+    
+
+#     # o2_flux reconstructed from tracer and velocity field (vel*tracer*dyt*dzt*rho)
+#     # Are the values actually interpolated or do they take the center tracer value? Read up in MOM5 manual and correct if needed.
+#     # This will need some more advanced testing...in the end we cannot really reproduce the complex advection scheme, but it is worth trying
+# #     # to get as close as possible.
+# #     ds['o2_xflux_adv_recon'] = grid.interp(ds['o2'], 'X') * u * ds.dzt * ds.dyte * rho
+# #     ds['o2_yflux_adv_recon'] = grid.interp(ds['o2'], 'Y') * v * ds.dzt * ds.dxtn * rho
+# #     ds['o2_zflux_adv_recon'] = grid.interp(ds['o2'], 'Z') * wt * ds.dxt * ds.dyt * rho
+
+#     # Reconstruct the advective tendencies (as (tracer* s^-1) * dzt * rho)
+#     # also not sure about the numerics here...this implements finite difference approach...which mom used for some variables but not all...
+
+#     ds['o2_advection_x_recon_full'] = - (grid.diff(ds['o2_xflux_adv_recon'], 'X') / ds.area_t)
+#     ds['o2_advection_x_recon_du'] = - (ds['o2'] * grid.diff(u, 'X') / ds.dxt * ds.dzt * rho)
+#     ds['o2_advection_x_recon_do2'] = - (u * grid.diff(ds['o2'], 'X') / dxte * ds.dzt * rho)
+
+#     ds['o2_advection_y_recon_full'] = - (grid.diff(ds['o2_yflux_adv_recon'], 'Y') / ds.area_t)
+#     ds['o2_advection_y_recon_dv'] = - (ds['o2'] * grid.diff(v, 'Y') / ds.dyt * ds.dzt * rho)
+#     ds['o2_advection_y_recon_do2'] = - (v * grid.diff(ds['o2'], 'Y') / dytn * ds.dzt * rho)
+
+#     ds['o2_advection_z_recon_full'] =  (grid.diff(ds['o2_zflux_adv_recon'], 'Z') / ds.area_t)
+#     ds['o2_advection_z_recon_dwt'] =  (ds['o2'] * grid.diff(wt, 'Z') * rho)
+#     ds['o2_advection_z_recon_do2'] =  (wt * grid.diff(ds['o2'], 'Z') * rho)
+    return ds
+
 ################# more high level convenience functions
+
+
+def add_vertical_spacing(ds):
+    grid = Grid(ds)
+    ds.coords['dst'] = calculate_ds(ds, dim='st')
+    ds.coords['dswt'] = calculate_ds(ds, dim='sw')
+    ds.coords['dzt'] = calculate_dz(ds['eta_t'], ds['ht'], ds['dst'])
+    ds.coords['dzu'] = grid.min(grid.min(ds['dzt'], 'X'),'Y')
+    # the dzwt value is dependent on the model version (finite vol vs. engergetically consistent?; See MOM5 manual section 10.4.2)
+    return ds
 
 def split_adv_budget(ds):
     ds = ds.copy()
@@ -40,47 +130,50 @@ def budget_prep(ds, tracer='o2'):
         ds['%s_residual' %tracer] = ds['%s_tendency' %tracer] - (ds['%s_advection' %tracer] + ds['j%s' %tracer] + ds['%s_diff' %tracer] + ds['%s_submeso' %tracer])
     return ds
 
-################### Bare bones budget calculations
+##################################
+# Bare bones budget calculations #
+##################################
 
+##### Vertical coordinates #######
 def calculate_dzstar(ds, dim='st'):
-    """Creates static thickness (dzstar) for MOM5 tracer cells.
-    Note that the cell thickness for u cells is defined as min of the sourrounding cells."""
+    print('Outdated function. Use `calculate_ds` instead')
+    return calculate_ds(ds, dim=dim)
+
+def calculate_ds(ds, dim='st'):
+    """Creates static thickness (ds) for MOM5 tracer cells ()."""
     z = ds['%s_ocean' %dim]
     diff_dim = '%s_edges_ocean' %dim
     dz_raw = ds[diff_dim].diff(diff_dim).data
+    # I am basing this on the edge values, assuming these are the dz values at time =0 (see MOM5_manual; 10.4.2)
     return xr.DataArray(dz_raw, coords=z.coords)
 
-def calculate_dz(eta, h, dzstar):
+def calculate_dz(eta, h, ds):
     """reconstructs cell thickness dz(x,y,z,t) from sea surface elevation ('eta') and the full ocean depth ('h')
-    and fixed thickness levels (dzstar)."""
-    dz = dzstar*(1+(eta/h))
+    and fixed thickness levels (ds)."""
+    dz = ds*(1+(eta/h))
     return dz
 
-# Legacy version (deprecate soon)
-def reconstruct_thickness(eta, h, mask, dz_star, ref_array):
-    """reconstructs cell thickness dz(x,y,z,t) from sea surface elevation ('eta') and the full ocean depth ('h')
-    and fixed thickness levels (dz_star). ref has to be a full (x,y,z,t) array to carry 3d masking"""
-    print('Old version with masking implemented. Change to `calculate_dzt` and mask afterwards')
-    ones  = (ref_array*0+1).where(mask)
-    dz = ones*dz_star*(1+(eta/h))
-    return dz
+# # Legacy version (deprecate soon)
+# def reconstruct_thickness(eta, h, mask, dz_star, ref_array):
+#     """reconstructs cell thickness dz(x,y,z,t) from sea surface elevation ('eta') and the full ocean depth ('h')
+#     and fixed thickness levels (dz_star). ref has to be a full (x,y,z,t) array to carry 3d masking"""
+#     print('Old version with masking implemented. Change to `calculate_dzt` and mask afterwards')
+#     ones  = (ref_array*0+1).where(mask)
+#     dz = ones*dz_star*(1+(eta/h))
+#     return dz
 
+######### Transports #########
 
-def reconstruct_hrho_trans(u, v, wt, rho_dzt, grid, rho, reconstruct_w_from_cont=False):
+def reconstruct_hrho_trans(u, v, wt, rho_dzt, rho_dzu, grid, rho):
     """Reconstruct thickness weighted mass transport in x,y,z direction.
     Units: uhrho_et/vhrho_nt [kg * s^-1 * m^-1]
            wrhot [kg * s^-1 * m^-2]"""
-    rho_dzu = grid_shift(grid_shift(min_at_u(rho_dzt), 'X', grid), 'Y', grid)
     uhrho_et = remap_u_2_et((u * rho_dzu), grid)
     vhrho_nt = remap_v_2_nt((v * rho_dzu), grid)
-
-    # I need to build in a routine to get w from cont
-    if reconstruct_w_from_cont:
-        raise RuntimeError('Not implemented')
-#         wrhot = grid_shift((- uhrho_et - vhrho_nt), 'Z', grid)
-    else:
-        wrhot = wt * rho
+    wrhot = wt * rho
     return uhrho_et, vhrho_nt, wrhot
+
+# I need to write a function to get the wrhot from contiunity! Otherwise the reconstructed fluxes might actually be divergent.
 
 def approximate_transport_op(uflux, vflux, wflux, tracer, grid, boundary='extend'):
     """Approximate the MOM5 transport operator. Fluxes are given as total tracer mass flux across x,y,z face
@@ -99,8 +192,14 @@ def horizontal_t_cell_div(u, v, w, grid, boundary='extend'):
     div_w = grid.diff(w, 'Z', boundary=boundary)
     return div_u, div_v, div_w
 
-def t_cell_tendency(uflux, vflux, wflux, tracer, grid):
-    """converts thicknesswighted (horizontal) mass trans"""
+def tend_from_fluxes(xflux, yflux, zflux, grid):
+    """depth weighted tracer tendencies (x-y-z) from tracer fluxes (fully integrated over cell face) at the t-cell boundary"""
+    x, y, z = horizontal_t_cell_div(xflux, yflux, zflux, grid, boundary='extend')
+    return x / grid._ds.area_t, y / grid._ds.area_t, z / grid._ds.area_t
+
+# These are not modular enough...keep em for convenience but phase out at some point
+def t_cell_tendency_split(uflux, vflux, wflux, tracer, grid):
+    """converts thicknesswighted (horizontal) mass transport into tracer tendencies (x,y,z) using the """
 
     tracer_xflux_adv, tracer_yflux_adv, tracer_zflux_adv = \
         approximate_transport_op(uflux, vflux, wflux, tracer, grid)
@@ -110,21 +209,29 @@ def t_cell_tendency(uflux, vflux, wflux, tracer, grid):
                                                    tracer_zflux_adv,
                                                    grid)
 
-    return (uf_div + vf_div + wf_div) / grid._ds.area_t
+    return (uf_div / grid._ds.area_t), (vf_div / grid._ds.area_t),  (wf_div  / grid._ds.area_t)
 
-def grid_shift(da, axis, grid, boundary='extend'):
-    ref = grid.interp(da, axis, boundary=boundary)
-    return xr.DataArray(da.data, coords=ref.coords, dims=ref.coords)
+def t_cell_tendency(uflux, vflux, wflux, tracer, grid):
+    """converts thicknesswighted (horizontal) mass trans"""
+    
+    u_tendency, v_tendency, w_tendency = \
+        t_cell_tendency_split(uflux, vflux, wflux, tracer, grid)
+    return u_tendency + v_tendency, w_tendency
 
-# Reconstruct dzu (minimum of sourrounding grid cells)
-def min_at_u(t_array, xdim='xt_ocean', ydim='yt_ocean'):
-    ll = t_array
-    lr = t_array.roll(**{xdim:-1})
-    ul = t_array.roll(**{ydim:-1})
-    ur = t_array.roll(**{xdim:-1, ydim:-1})
-    u_min = xr.ufuncs.minimum(ul,ur)
-    l_min = xr.ufuncs.minimum(ll,lr)
-    return xr.ufuncs.minimum(u_min, l_min)
+# Not needed anymore since grid.min is implemented in xgcm
+# def grid_shift(da, axis, grid, boundary='extend'):
+#     ref = grid.interp(da, axis, boundary=boundary)
+#     return xr.DataArray(da.data, coords=ref.coords, dims=ref.coords)
+
+# # Reconstruct dzu (minimum of sourrounding grid cells)
+# def min_at_u(t_array, xdim='xt_ocean', ydim='yt_ocean'):
+#     ll = t_array
+#     lr = t_array.roll(**{xdim:-1})
+#     ul = t_array.roll(**{ydim:-1})
+#     ur = t_array.roll(**{xdim:-1, ydim:-1})
+#     u_min = xr.ufuncs.minimum(ul,ur)
+#     l_min = xr.ufuncs.minimum(ll,lr)
+#     return xr.ufuncs.minimum(u_min, l_min)
 
 def remap_u_2_et(u, grid, boundary='extend'):
     dyu = grid._ds.dyu

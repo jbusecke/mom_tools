@@ -178,7 +178,7 @@ def open_mom5_single_var(ddir, var, years=None, yearfmt='%040101', filenamefmt=N
     ds = xr.open_mfdataset(all_fnames,
                            drop_variables=drop_vars,
                            decode_times=decode_times,
-                           autoclose=True,
+#                            autoclose=True,
                            concat_dim='time',
                            preprocess=pp_func,
                            chunks={'time': 1},
@@ -311,3 +311,29 @@ def open_mom5_CM_ESM(basedir, timespec='monthly_1yr', subfolder='av', varfolderl
         ds_grid = xr.open_mfdataset(gridfile)
         ds_out.update(ds_grid)
     return ds_out
+
+def parse_xgcm_attributes(ds, xc='xt_ocean', xg='xu_ocean',
+                          yc='yt_ocean', yg='yu_ocean',
+                          zc='st_ocean', zg='sw_ocean'):
+    """ Adds axis attributes needed for xgcm to recognize the grid"""
+    if (xc is not None) and (xc in ds.dims):
+        ds[xc] = ds[xc].assign_attrs(axis='X')
+
+    if (xg is not None) and (xg in ds.dims):
+        ds[xg] = ds[xg].assign_attrs(axis='X')
+        ds[xg] = ds[xg].assign_attrs(c_grid_axis_shift=0.5)
+
+    if (yc is not None) and (yc in ds.dims):
+        ds[yc] = ds[yc].assign_attrs(axis='Y')
+
+    if (yg is not None) and (yg in ds.dims):
+        ds[yg] = ds[yg].assign_attrs(axis='Y')
+        ds[yg] = ds[yg].assign_attrs(c_grid_axis_shift=0.5)
+
+    if (zc is not None) and (zc in ds.dims):
+        ds[zc] = ds[zc].assign_attrs(axis='Z')
+
+    if (zg is not None) and (zg in ds.dims):
+        ds[zg] = ds[zg].assign_attrs(axis='Z')
+        ds[zg] = ds[zg].assign_attrs(c_grid_axis_shift=0.5)
+    return ds
