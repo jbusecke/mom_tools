@@ -9,15 +9,15 @@ import os
 def add_split_tendencies(ds):
     """Reconstructs various fluxes and tendencies (x-y_x) from the monthly averaged output. Hardcoded to o2 atm."""
     ds = ds.copy()
-    
-    
     rho = 1035 #reference density
     grid = Grid(ds)
     
     # This should be calculated upstream (see: add_vertical_spacing), it is possibly totally wrong
     if 'dzwt' not in ds.coords:
         print('Vertical spacing for vertical vel cell is approximated!!! Use with caution')
-        ds.coords['dzwt'] = grid.interp(ds['dzt'], 'Z')
+#         ds.coords['dzwt'] = grid.interp(ds['dzt'], 'Z')
+        # This avoids computation. Somehow things are triggered when these fields are coordinates.
+        ds['dzwt'] = grid.interp(ds['dzt'], 'Z')
     # These should be less critical, but should be given nontheless
     if 'dxte' not in ds.coords:
         print('Spacing for `dxte` is approximated!!! Use with caution')
@@ -94,10 +94,17 @@ def add_vertical_spacing(ds):
     ds.coords['dswt'] = calculate_ds(ds, dim='sw')
     ds.coords['dzt'] = calculate_dz(ds['eta_t'], ds['ht'], ds['dst'])
     ds.coords['dzu'] = grid.min(grid.min(ds['dzt'], 'X'),'Y')
+#     # Avoids suspected computation midway during the dask graph creation...Should probably raise an xarray issue about this.
+#     ds['dzt'] = calculate_dz(ds['eta_t'], ds['ht'], ds['dst'])
+#     ds['dzu'] = grid.min(grid.min(ds['dzt'], 'X'),'Y')
+#     # Lets try this as a workaround...
+#     for vv in ['dzt', 'dzu']:
+#         ds.coords[vv] = ds[vv]
     # the dzwt value is dependent on the model version (finite vol vs. engergetically consistent?; See MOM5 manual section 10.4.2)
     return ds
 
 def split_adv_budget(ds):
+    print('I think this is outdated....')
     ds = ds.copy()
     if 'o2_xflux_adv' in list(ds.data_vars):
         grid=Grid(ds)
@@ -139,18 +146,60 @@ def calculate_dzstar(ds, dim='st'):
     print('Outdated function. Use `calculate_ds` instead')
     return calculate_ds(ds, dim=dim)
 
-def calculate_ds(ds, dim='st'):
+def calculate_ds(ds, dim='st', partial_bottom=True):
     """Creates static thickness (ds) for MOM5 tracer cells ()."""
     z = ds['%s_ocean' %dim]
     diff_dim = '%s_edges_ocean' %dim
-    dz_raw = ds[diff_dim].diff(diff_dim).data
+    edges = ds[diff_dim]
+    if partial_bottom:
+        edges = calculate_partial_bottom(edges, ds['kmt'], ds['ht'])
+        z = z * xr.ones_like(ds['kmt'])
+    
+    dz_raw = edges.diff(diff_dim).data
     # I am basing this on the edge values, assuming these are the dz values at time =0 (see MOM5_manual; 10.4.2)
     return xr.DataArray(dz_raw, coords=z.coords)
+
+def calculate_partial_bottom(edges, bot_idx, bot_dep):
+    """Creates array of cell edges, accounting for partial cells at the bottom
+    
+    Parameters
+    ----------
+    edges : xr.DataArray
+        1D array of cell edges (usual names: `st_edges_ocean`, 'swt_edges_ocean' or similar).
+    bot_idx : xr.DataArray
+        2D array of number of ocean cells in the vertical (usual names: `kmt` or `kmu`)
+    bot_idx : xr.DataArray
+        2D array of static bottom depth (bathymetry) (usual names: `ht` or `hu`)
+
+    Returns
+    -------
+    edges_partial_bottom: xr.DataArray
+        3D array of cell edges, accounting for the bathymetry.
+        True if successful, False otherwise.
+
+    .. _PEP 484:
+        https://www.python.org/dev/peps/pep-0484/
+    """
+    full_edges = edges * (xr.ones_like(bot_dep))
+
+    edge_count = xr.ones_like(edges) * range(len(edges))
+    full_count = edge_count * xr.ones_like(full_edges) # full array of depth indicies
+
+    # mask values larger than bottom depth
+    rough_mask = full_count <= bot_idx
+    full_edges_masked = full_edges.where(rough_mask)
+
+    # replace values at bottom of last cell with actual depth
+    bottom_mask = full_count == bot_idx
+    bottom_correction = (full_edges_masked.where(bottom_mask) - bot_dep).fillna(0)
+    edges_partial_bottom = full_edges_masked - bottom_correction
+    return edges_partial_bottom
+    
 
 def calculate_dz(eta, h, ds):
     """reconstructs cell thickness dz(x,y,z,t) from sea surface elevation ('eta') and the full ocean depth ('h')
     and fixed thickness levels (ds)."""
-    dz = ds*(1+(eta/h))
+    dz = ds * (1 + (eta / h))
     return dz
 
 # # Legacy version (deprecate soon)
